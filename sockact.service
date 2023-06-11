@@ -1,0 +1,19 @@
+[Unit]
+Description = sockact HTTP server
+Requires    = sockact.socket
+After       = multi-user.target
+
+[Service]
+Type             = notify
+User             = root
+Group            = root
+WorkingDirectory = /var/lib/sockact
+ExecStart        = /var/lib/sockact/bin/sockact
+ExecReload       = /bin/kill -HUP $MAINPID
+Restart          = always
+NotifyAccess     = main
+KillMode         = process
+NonBlocking      = true
+
+[Install]
+WantedBy = multi-user.target

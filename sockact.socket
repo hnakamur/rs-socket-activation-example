@@ -1,0 +1,9 @@
+[Unit]
+Description=sockact HTTP server socket
+
+[Socket]
+ListenStream = 3000
+BindIPv6Only = both
+
+[Install]
+WantedBy = multi-user.target
