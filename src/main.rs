@@ -1,6 +1,7 @@
 use std::{collections::HashMap, convert::Infallible, time::Duration};
 
 use anyhow::anyhow;
+use clap::Parser;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server, StatusCode,
@@ -14,6 +15,14 @@ use tokio::{
 use url::form_urlencoded;
 
 static INVALID_WAIT: &[u8] = b"\"wait\" query parameter must be unsigned integer for seconds";
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// shutdown timeout in seconds
+    #[arg(long, default_value_t = 30)]
+    shutdown_timeout: u64,
+}
 
 async fn hello_world(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     if let Some(q) = req.uri().query() {
@@ -32,7 +41,7 @@ async fn hello_world(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             }
         }
     }
-    Ok(Response::new("Hello, World!!\n".into()))
+    Ok(Response::new("Hello, World\n".into()))
 }
 
 async fn shutdown_signal() {
@@ -57,6 +66,9 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let shutdown_timeout = Duration::from_secs(args.shutdown_timeout);
+
     let fds = daemon::listen_fds(false)?;
     if fds.len() != 1 {
         return Err(anyhow!(
@@ -75,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         shutdown_signal().await;
         tx.send(()).unwrap();
-        sleep(Duration::from_secs(3)).await;
+        sleep(shutdown_timeout).await;
         tx2.send(()).unwrap();
     });
     let graceful = server.with_graceful_shutdown(async {
