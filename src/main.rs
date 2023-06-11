@@ -1,14 +1,37 @@
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible, time::Duration};
 
 use anyhow::anyhow;
 use hyper::{
     service::{make_service_fn, service_fn},
-    Body, Request, Response, Server,
+    Body, Request, Response, Server, StatusCode,
 };
 use systemd::daemon;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::{
+    signal::unix::{signal, SignalKind},
+    sync::oneshot,
+    time::sleep,
+};
+use url::form_urlencoded;
 
-async fn hello_world(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
+static INVALID_WAIT: &[u8] = b"\"wait\" query parameter must be unsigned integer for seconds";
+
+async fn hello_world(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    if let Some(q) = req.uri().query() {
+        let params = form_urlencoded::parse(q.as_bytes())
+            .into_owned()
+            .collect::<HashMap<String, String>>();
+        if let Some(wait) = params.get("wait") {
+            match wait.parse::<u64>() {
+                Ok(seconds) => sleep(Duration::from_secs(seconds)).await,
+                Err(_) => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::UNPROCESSABLE_ENTITY)
+                        .body(INVALID_WAIT.into())
+                        .unwrap())
+                }
+            }
+        }
+    }
     Ok(Response::new("Hello, World!!\n".into()))
 }
 
@@ -46,12 +69,32 @@ async fn main() -> anyhow::Result<()> {
 
     let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(hello_world)) });
     let server = Server::from_tcp(std_listener)?.serve(make_svc);
-    let graceful = server.with_graceful_shutdown(shutdown_signal());
+
+    let (tx, rx) = oneshot::channel();
+    let (tx2, rx2) = oneshot::channel();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        tx.send(()).unwrap();
+        sleep(Duration::from_secs(3)).await;
+        tx2.send(()).unwrap();
+    });
+    let graceful = server.with_graceful_shutdown(async {
+        rx.await.ok();
+    });
     if daemon::notify(false, [(daemon::STATE_READY, "1")].iter())? {
         println!("sent STATE_READY to systmd");
     }
-    if let Err(e) = graceful.await {
-        eprintln!("server error: {}", e);
+    tokio::select! {
+        _ = rx2 => {
+            println!("force shutdown");
+        },
+        res = graceful => {
+            if let Err(e) = res {
+                eprintln!("server error: {}", e);
+            } else {
+                println!("finished graceful shutdown");
+            }
+        }
     }
     Ok(())
 }
